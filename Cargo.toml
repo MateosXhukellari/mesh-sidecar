@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 rustls = "0.23.45"
+serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.53.2", features = ["full"] }
 tokio-rustls = "0.26.6"
+toml = "1.1.8"
 x509-parser = "0.18.1"

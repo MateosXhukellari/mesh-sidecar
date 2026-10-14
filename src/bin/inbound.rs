@@ -7,6 +7,8 @@ use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use x509_parser::prelude::*;
+use serde::Deserialize;
+use std::collections::HashSet;
 
 fn load_certs(path: &str) -> Vec<CertificateDer<'static>> {
     CertificateDer::pem_file_iter(path)
@@ -32,8 +34,21 @@ fn spiffe_id(cert: &CertificateDer) -> Option<String> {
 }
 
 // who many call this service, any other service is denied
-fn is_allowed(caller: &str) -> bool {
-    matches!(caller, "spiffe://mesh/orders")
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Policy {
+    allow: HashSet<String>
+}
+
+impl Policy {
+    fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let text = std::fs::read_to_string(path)?;
+        Ok(toml::from_str(&text)?)
+    }
+
+    fn is_allowed(&self, caller: &str) -> bool {
+        self.allow.contains(caller)       
+    }
 }
 
 #[tokio::main]
@@ -55,10 +70,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listner = TcpListener::bind("127.0.0.1:9443").await?;
     println!("inbound sidecar (mTLS) on 127.0.0.1:9443 -> backend 127.0.0.1:9001");
+
+    let policy = Arc::new(Policy::load("policy.toml")?);
     
     loop {
         let (tcp, peer) = listner.accept().await?;
         let acceptor = acceptor.clone();
+        let policy = policy.clone();
 
         tokio::spawn(async move {
             // 1: TLS handshake. Failed if the cert is not signed by our CA
@@ -84,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // 2: policy
-            if !is_allowed(&caller) {
+            if !policy.is_allowed(&caller) {
                 eprintln!("{peer} DENIED by policy: {caller}");
                 return;
             }
@@ -101,5 +119,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let _ = copy_bidirectional(&mut tls, &mut backend).await;
         });
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_listed_denies_others() {
+        let p: Policy = toml::from_str(r#"allow = ["spiffe://mesh/orders"]"#).unwrap();
+        assert!(p.is_allowed("spiffe://mesh/orders"));
+        assert!(!p.is_allowed("spiffe://mesh/analytics"));
+    }
+
+    #[test]
+    fn empty_policy_denies_everyone() {
+        let p: Policy = toml::from_str("allow = []").unwrap();
+        assert!(!p.is_allowed("spiffe://mesh/orders"));
+    }
+
+    #[test]
+    fn typo_in_policy_is_an_error() {
+        assert!(toml::from_str::<Policy>(r#"alow = ["x"]"#).is_err());
     }
 }

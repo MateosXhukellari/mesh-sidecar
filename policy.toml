@@ -1,0 +1,1 @@
+allow = ["spiffe://mesh/orders"]
