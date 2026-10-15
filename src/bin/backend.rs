@@ -6,7 +6,7 @@ async fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:9001").await?;
     println!("listening on 127.0.0.1:9001");
 
-    loop{
+    loop {
         let (mut socket, peer) = listener.accept().await?;
         println!("connection from {peer}");
 

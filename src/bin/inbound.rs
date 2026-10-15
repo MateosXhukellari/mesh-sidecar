@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
+use serde::Deserialize;
+use std::collections::HashSet;
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use x509_parser::prelude::*;
-use serde::Deserialize;
-use std::collections::HashSet;
 
 fn load_certs(path: &str) -> Vec<CertificateDer<'static>> {
     CertificateDer::pem_file_iter(path)
@@ -37,7 +37,7 @@ fn spiffe_id(cert: &CertificateDer) -> Option<String> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Policy {
-    allow: HashSet<String>
+    allow: HashSet<String>,
 }
 
 impl Policy {
@@ -47,7 +47,7 @@ impl Policy {
     }
 
     fn is_allowed(&self, caller: &str) -> bool {
-        self.allow.contains(caller)       
+        self.allow.contains(caller)
     }
 }
 
@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("inbound sidecar (mTLS) on 127.0.0.1:9443 -> backend 127.0.0.1:9001");
 
     let policy = Arc::new(Policy::load("policy.toml")?);
-    
+
     loop {
         let (tcp, peer) = listner.accept().await?;
         let acceptor = acceptor.clone();
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         tokio::spawn(async move {
             // 1: TLS handshake. Failed if the cert is not signed by our CA
-            let mut tls  = match acceptor.accept(tcp).await {
+            let mut tls = match acceptor.accept(tcp).await {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("{peer} REJECTED (handshake): {e}");
@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Read the verified identity from the caller's certificate
             let caller = {
-                let (_,conn) = tls.get_ref();
+                let (_, conn) = tls.get_ref();
                 conn.peer_certificates()
                     .and_then(|certs| certs.first())
                     .and_then(spiffe_id)
@@ -121,7 +121,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 }
-
 
 #[cfg(test)]
 mod tests {

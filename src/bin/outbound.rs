@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::WebPkiServerVerifier;
-use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject};
 use rustls::{
     CertificateError, ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme,
 };
@@ -107,10 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(SpiffeVerifier { inner }))
-        .with_client_auth_cert(
-            load_certs("certs/orders.crt"),
-            load_key("certs/orders.key"),
-        )?;
+        .with_client_auth_cert(load_certs("certs/orders.crt"), load_key("certs/orders.key"))?;
     let connector = TlsConnector::from(Arc::new(config));
     let server_name = ServerName::try_from("payments")?.to_owned();
 
@@ -143,7 +140,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 }
-
 
 /*
 SpiffeVerifier wraps the standard WebPkiServerVerifier. The inner field does the real cryptographic work, and we only add our own name rule on top.

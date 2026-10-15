@@ -6,7 +6,7 @@ async fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:9000").await?;
     println!("proxy listening on 127.0.0.1:9000 -> 127.0.0.1:9001");
 
-    loop{
+    loop {
         let (mut inbound, peer) = listener.accept().await?;
         println!("connection from {peer}");
 
@@ -23,7 +23,7 @@ async fn main() -> std::io::Result<()> {
                 Ok((to_backend, to_client)) => {
                     println!("{peer} closed: {to_backend} bytes up, {to_client} bytes down");
                 }
-                Err(e) => eprintln!("{peer} error: {e}")
+                Err(e) => eprintln!("{peer} error: {e}"),
             }
         });
     }
