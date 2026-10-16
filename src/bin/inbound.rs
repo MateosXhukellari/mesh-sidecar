@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
-use mesh_sidecar::{load_certs, spiffe_id};
+use mesh_sidecar::{keep_renewed, load_certs, no_resumption_server, spiffe_id, CertStore, CA_ENROLL_ADDR, CA_RENEW_ADDR};
 
 // who many call this service, any other service is denied
 #[derive(Deserialize)]
@@ -34,18 +34,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for c in load_certs("certs/ca.crt") {
         roots.add(c)?;
     }
-    let verifier = WebPkiClientVerifier::builder(Arc::new(roots)).build()?;
+    let roots = Arc::new(roots);
+    let verifier = WebPkiClientVerifier::builder(roots.clone()).build()?;
 
     let token = std::env::var("MESH_TOKEN").expect("set MESH_TOKEN");
-    let me = mesh_sidecar::enroll("127.0.0.1:9100", &token).await?;
+    let me = mesh_sidecar::enroll(CA_ENROLL_ADDR, &token).await?;
 
-    let config = ServerConfig::builder()
+    // The store is asked for a cert on every handshake, so renewal can swap it.
+    let store = Arc::new(CertStore::new(me)?);
+    tokio::spawn(keep_renewed(CA_RENEW_ADDR, roots, store.clone()));
+
+    let mut config = ServerConfig::builder()
         .with_client_cert_verifier(verifier)
-        .with_single_cert(
-            me.cert_chain, 
-            me.key
-        )?;
-        
+        .with_cert_resolver(store);
+    no_resumption_server(&mut config);
+
+
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
     let listner = TcpListener::bind("127.0.0.1:9443").await?;

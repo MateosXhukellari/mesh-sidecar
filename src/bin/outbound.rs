@@ -1,78 +1,15 @@
 use std::sync::Arc;
 
 use rustls::client::WebPkiServerVerifier;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{
-    CertificateError, ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme,
-};
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, RootCertStore};
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsConnector;
-use mesh_sidecar::{load_certs, spiffe_id};
+use mesh_sidecar::{keep_renewed, load_certs, no_resumption_client, CertStore, SpiffeVerifier, CA_ENROLL_ADDR, CA_RENEW_ADDR};
 
 // The only identity this outbound sidecar is willing to talk to.
 const EXPECTED_PEER: &str = "spiffe://mesh/payments";
-
-// Chain check by rustls, name check by us.
-#[derive(Debug)]
-struct SpiffeVerifier {
-    inner: Arc<WebPkiServerVerifier>,
-}
-
-impl ServerCertVerifier for SpiffeVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        intermediates: &[CertificateDer<'_>],
-        server_name: &ServerName<'_>,
-        ocsp_response: &[u8],
-        now: UnixTime,
-    ) -> Result<ServerCertVerified, Error> {
-        // 1. Normal verification. The chain is checked before the name,
-        //    so a "wrong name" error means the chain itself was valid.
-        match self.inner.verify_server_cert(
-            end_entity,
-            intermediates,
-            server_name,
-            ocsp_response,
-            now,
-        ) {
-            Ok(_) => {}
-            Err(Error::InvalidCertificate(CertificateError::NotValidForName)) => {}
-            Err(Error::InvalidCertificate(CertificateError::NotValidForNameContext { .. })) => {}
-            Err(e) => return Err(e),
-        }
-
-        // 2. Our own name check: does the cert carry the identity we expect?
-        match spiffe_id(end_entity) {
-            Some(id) if id == EXPECTED_PEER => Ok(ServerCertVerified::assertion()),
-            _ => Err(Error::General("peer identity mismatch".into())),
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        self.inner.verify_tls12_signature(message, cert, dss)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        self.inner.verify_tls13_signature(message, cert, dss)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.inner.supported_verify_schemes()
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -80,19 +17,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for c in load_certs("certs/ca.crt") {
         roots.add(c)?;
     }
-    let inner = WebPkiServerVerifier::builder(Arc::new(roots)).build()?;
+    let roots = Arc::new(roots);
+    let inner = WebPkiServerVerifier::builder(roots.clone()).build()?;
 
     let token = std::env::var("MESH_TOKEN").expect("set MESH_TOKEN");
-    let me = mesh_sidecar::enroll("127.0.0.1:9100", &token).await?;
+    let me = mesh_sidecar::enroll(CA_ENROLL_ADDR, &token).await?;
 
-    let config = ClientConfig::builder()
+    // The store is asked for a cert on every handshake, so renewal can swap it.
+    let store = Arc::new(CertStore::new(me)?);
+    tokio::spawn(keep_renewed(CA_RENEW_ADDR, roots, store.clone()));
+
+    let mut config = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(SpiffeVerifier { inner }))
-        .with_client_auth_cert(
-            me.cert_chain,
-            me.key
-        )?;
-    
+        .with_custom_certificate_verifier(Arc::new(SpiffeVerifier::new(inner, EXPECTED_PEER)))
+        .with_client_cert_resolver(store);
+    no_resumption_client(&mut config);
+
     let connector = TlsConnector::from(Arc::new(config));
     let server_name = ServerName::try_from("payments")?.to_owned();
 
