@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
 use serde::Deserialize;
@@ -8,30 +7,7 @@ use std::collections::HashSet;
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
-use x509_parser::prelude::*;
-
-fn load_certs(path: &str) -> Vec<CertificateDer<'static>> {
-    CertificateDer::pem_file_iter(path)
-        .expect("cannot open cert from file")
-        .map(|c| c.expect("bad cert"))
-        .collect()
-}
-
-fn load_key(path: &str) -> PrivateKeyDer<'static> {
-    PrivateKeyDer::from_pem_file(path).expect("cannot read key")
-}
-
-// gets the spiffe:// identity from verified cert
-fn spiffe_id(cert: &CertificateDer) -> Option<String> {
-    let (_, parsed) = X509Certificate::from_der(cert.as_ref()).ok()?;
-    let san = parsed.subject_alternative_name().ok()??;
-    for name in &san.value.general_names {
-        if let GeneralName::URI(uri) = name {
-            return Some(uri.to_string());
-        }
-    }
-    None
-}
+use mesh_sidecar::{load_certs, load_key, spiffe_id};
 
 // who many call this service, any other service is denied
 #[derive(Deserialize)]

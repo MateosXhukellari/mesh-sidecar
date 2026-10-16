@@ -2,39 +2,17 @@ use std::sync::Arc;
 
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{
     CertificateError, ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme,
 };
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsConnector;
-use x509_parser::prelude::*;
+use mesh_sidecar::{load_certs, load_key, spiffe_id};
 
 // The only identity this outbound sidecar is willing to talk to.
 const EXPECTED_PEER: &str = "spiffe://mesh/payments";
-
-fn load_certs(path: &str) -> Vec<CertificateDer<'static>> {
-    CertificateDer::pem_file_iter(path)
-        .expect("cannot open cert file")
-        .map(|c| c.expect("bad cert"))
-        .collect()
-}
-
-fn load_key(path: &str) -> PrivateKeyDer<'static> {
-    PrivateKeyDer::from_pem_file(path).expect("cannot read key")
-}
-
-fn spiffe_id(cert: &CertificateDer) -> Option<String> {
-    let (_, parsed) = X509Certificate::from_der(cert.as_ref()).ok()?;
-    let san = parsed.subject_alternative_name().ok()??;
-    for name in &san.value.general_names {
-        if let GeneralName::URI(uri) = name {
-            return Some(uri.to_string());
-        }
-    }
-    None
-}
 
 // Chain check by rustls, name check by us.
 #[derive(Debug)]
