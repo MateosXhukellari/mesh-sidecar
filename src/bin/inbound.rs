@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
-use mesh_sidecar::{load_certs, load_key, spiffe_id};
+use mesh_sidecar::{load_certs, spiffe_id};
 
 // who many call this service, any other service is denied
 #[derive(Deserialize)]
@@ -17,7 +17,7 @@ struct Policy {
 }
 
 impl Policy {
-    fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    fn load(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let text = std::fs::read_to_string(path)?;
         Ok(toml::from_str(&text)?)
     }
@@ -28,7 +28,7 @@ impl Policy {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // trust only certs signed from our CA
     let mut roots = RootCertStore::empty();
     for c in load_certs("certs/ca.crt") {
@@ -36,12 +36,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let verifier = WebPkiClientVerifier::builder(Arc::new(roots)).build()?;
 
+    let token = std::env::var("MESH_TOKEN").expect("set MESH_TOKEN");
+    let me = mesh_sidecar::enroll("127.0.0.1:9100", &token).await?;
+
     let config = ServerConfig::builder()
         .with_client_cert_verifier(verifier)
         .with_single_cert(
-            load_certs("certs/payments.crt"),
-            load_key("certs/payments.key"),
+            me.cert_chain, 
+            me.key
         )?;
+        
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
     let listner = TcpListener::bind("127.0.0.1:9443").await?;

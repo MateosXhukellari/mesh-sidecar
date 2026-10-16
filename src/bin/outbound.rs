@@ -9,7 +9,7 @@ use rustls::{
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsConnector;
-use mesh_sidecar::{load_certs, load_key, spiffe_id};
+use mesh_sidecar::{load_certs, spiffe_id};
 
 // The only identity this outbound sidecar is willing to talk to.
 const EXPECTED_PEER: &str = "spiffe://mesh/payments";
@@ -75,17 +75,24 @@ impl ServerCertVerifier for SpiffeVerifier {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut roots = RootCertStore::empty();
     for c in load_certs("certs/ca.crt") {
         roots.add(c)?;
     }
     let inner = WebPkiServerVerifier::builder(Arc::new(roots)).build()?;
 
+    let token = std::env::var("MESH_TOKEN").expect("set MESH_TOKEN");
+    let me = mesh_sidecar::enroll("127.0.0.1:9100", &token).await?;
+
     let config = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(SpiffeVerifier { inner }))
-        .with_client_auth_cert(load_certs("certs/orders.crt"), load_key("certs/orders.key"))?;
+        .with_client_auth_cert(
+            me.cert_chain,
+            me.key
+        )?;
+    
     let connector = TlsConnector::from(Arc::new(config));
     let server_name = ServerName::try_from("payments")?.to_owned();
 
